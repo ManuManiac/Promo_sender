@@ -1,0 +1,296 @@
+Build a production-grade, full-stack Next.js 14 (App Router) web app named “Promo Hub” that lets a user design promotional emails and send them across three email providers (SendPulse, Brevo, Mailjet). The app must be premium-quality UI/UX, responsive (desktop + mobile iOS/Android), with password auth plus biometrics (passkeys via WebAuthn for FaceID/TouchID/Windows Hello). It should be fully deployable to Vercel and pushed to GitHub.
+
+High-level requirements
+
+Stack:
+Next.js 14 App Router + TypeScript
+Tailwind CSS + shadcn/ui + Radix for premium components
+GrapesJS for drag-and-drop email builder (newsletter preset + MJML plugin optional); inline CSS before sending
+Zod + React Hook Form for form validation
+Auth: Password + Passkeys (WebAuthn) with Lucia + @simplewebauthn (registration + authentication)
+Database: Prisma
+Local dev: SQLite
+Production: Neon/Postgres (detect via env)
+Providers:
+Brevo HTTP API: POST https://api.brevo.com/v3/smtp/email (header: api-key)
+Mailjet HTTP API: POST https://api.mailjet.com/v3.1/send (Basic Auth)
+SendPulse: OAuth token via POST https://api.sendpulse.com/oauth/access_token then POST https://api.sendpulse.com/smtp/emails
+CSV/Excel/Sheets import: papaparse + xlsx; Google Sheets import by public CSV export or service account.
+Deployment: Vercel (include vercel.json if needed), GitHub Action for CI
+Core features
+
+Authentication
+
+Email + password (Argon2 hashing), sessions via HttpOnly cookies
+Passkeys/WebAuthn:
+Register a passkey after login
+Login via passkey if passkey is registered
+Use @simplewebauthn/server + @simplewebauthn/browser
+Support platform authenticators (FaceID/TouchID/Windows Hello) in compatible browsers
+Protect app routes (builder, recipients, send dashboard) behind auth
+Email builder (drag-and-drop)
+
+Use GrapesJS with newsletter preset (and optional grapesjs-mjml)
+Toolbar: mobile/desktop preview, undo/redo, sections, images, text blocks, buttons, columns, spacers
+Auto inlining of CSS before sending (use juice)
+Save/load templates to DB
+Campaign form (single form wizard)
+
+Sender details: From name, From email, Reply-To, Subject, Preview text
+UTM builder: Automatically append UTM params to all links (utm_source, utm_medium, utm_campaign)
+Content editor: GrapesJS HTML output (convert MJML to HTML if MJML is used)
+Validation with Zod
+Save draft
+Recipients input
+
+Manual list textarea (comma or newline separated)
+File upload for CSV + XLSX (xlsx package); mapping step to map columns to email, firstName, lastName, custom fields
+Google Sheets import:
+Option A: A public spreadsheet URL; fetch CSV export url: https://docs.google.com/spreadsheets/d/<ID>/export?format=csv
+Option B: Private via service account (env Google creds JSON)
+Deduplicate emails, validate email format, show counts and any errors
+Store recipient lists in DB
+Sending engine (distribute across providers)
+
+Provider daily limits (configurable via env):
+SENDPULSE_DAILY_LIMIT default 400
+BREVO_DAILY_LIMIT default 300
+MAILJET_DAILY_LIMIT default 200
+Maintain daily usage counts per provider in DB (reset by date)
+Distribution algorithm:
+Given list of recipients, split into batches based on remaining capacity per provider: sendpulse -> brevo -> mailjet (in that order by default)
+Chunk recipients further to provider-safe batch sizes (e.g., 50–100 per API call); attach names if present
+API routes:
+POST /api/send/init: create a send job in DB (campaign payload + recipients). Returns jobId.
+POST /api/send/process: processes next chunk for a job; returns progress. Client polls/loops until complete to avoid serverless timeouts.
+GET /api/send/status?jobId=: returns cumulative status and logs.
+Inline CSS (juice) and ensure final HTML is email-safe
+Error handling + retry for transient errors; log per-recipient send result
+UI
+
+Premium Apple-like look, using -apple-system fonts and smooth micro-interactions
+Use brand colors in a theme system:
+Create CSS variables: --brand-primary, --brand-secondary, --brand-accent, --brand-bg, --brand-fg
+Add a config file config/brand.ts where we can paste actual hex values from https://ncmmastering.tilda.ws later. Provide tasteful defaults and mark TODO to insert final brand colors.
+Pages:
+/login, /register, /passkeys
+/dashboard: quick stats, recent campaigns
+/builder: email editor + campaign fields
+/recipients: upload/import/map/validate
+/send: review + send progress with real-time status
+/templates: save/load/delete
+Mobile responsive nav + large tap targets
+Security
+
+CSRF protection on POST routes
+Input validation (Zod)
+Never store plaintext passwords; use Argon2
+Sanitize file uploads; accept only CSV/XLSX; limit file size
+Rate limit auth and send routes (basic token bucket in-memory + production store option)
+Project structure (App Router)
+
+app/
+(auth)/login/page.tsx
+(auth)/register/page.tsx
+(auth)/passkeys/page.tsx
+dashboard/page.tsx
+builder/page.tsx
+recipients/page.tsx
+send/page.tsx
+templates/page.tsx
+api/
+auth/
+register/route.ts
+login/route.ts
+logout/route.ts
+webauthn/
+registration-options/route.ts
+verify-registration/route.ts
+authentication-options/route.ts
+verify-authentication/route.ts
+recipients/
+upload/route.ts
+sheets/route.ts
+send/
+init/route.ts
+process/route.ts
+status/route.ts
+components/
+onion/* (shadcn)
+EmailBuilder.tsx (GrapesJS wrapper; dynamic import; exports getHtml())
+RecipientUploader.tsx (CSV/XLSX/Sheets)
+CampaignForm.tsx (sender/subject/utm fields)
+SendProgress.tsx
+lib/
+auth/lucia.ts (Lucia config)
+auth/password.ts (argon2)
+auth/session.ts
+webauthn/server.ts (@simplewebauthn/server helpers)
+webauthn/types.ts
+validators.ts (Zod schemas)
+email/inlineCss.ts (juice)
+email/linkUtm.ts (append UTM)
+email/providers/brevo.ts
+email/providers/mailjet.ts
+email/providers/sendpulse.ts
+email/sender.ts (distribution + chunking)
+email/types.ts
+recipients/parse.ts (papaparse/xlsx)
+db.ts (Prisma)
+rateLimit.ts
+prisma/
+schema.prism
+styles/
+globals.css (tailwind)
+theme.css (CSS variables; brand colors)
+config/
+brand.ts (export brand color hexes)
+public/
+logo.svg, icons
+.github/workflows/ci.yml
+vercel.json
+README.md
+Prisma schema (include these models)
+
+User: id, email (unique), hash, createdAt, updatedAt
+Session: id, userId, expiresAt
+WebAuthnCredential: id (credentialID), userId, publicKey, counter, transports, deviceType, backedUp
+Template: id, userId, name, html, mjml, createdAt, updatedAt
+RecipientList: id, userId, name, createdAt, updatedAt
+Recipient: id, listId, email, firstName, lastName, custom JSON, createdAt
+Campaign: id, userId, subject, fromName, fromEmail, replyTo, previewText, utm JSON, html, createdAt
+SendJob: id, userId, campaignId, listId, status (queued|processing|completed|failed), total, sent, failed, logs JSON, createdAt, updatedAt
+ProviderUsage: id, date (YYYY-MM-DD string), provider ('sendpulse'|'brevo'|'mailjet'), usedCount, createdAt, updatedAt
+Environment variables
+
+DATABASE_URL (sqlite for dev; Postgres for prod)
+NEXT_PUBLIC_APP_URL
+SESSION_SECRET
+BREVO_API_KEY
+MAILJET_API_KEY
+MAILJET_API_SECRET
+SENDPULSE_CLIENT_ID
+SENDPULSE_CLIENT_SECRET
+SENDPULSE_FROM_EMAIL (default sender email registered in SendPulse)
+GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON (optional; stringified JSON)
+SENDPULSE_DAILY_LIMIT (default 400)
+BREVO_DAILY_LIMIT (default 300)
+MAILJET_DAILY_LIMIT (default 200)
+Dependencies to install
+
+next, react, react-dom, typescript, tailwindcss, postcss, autoprefixer
+@prisma/client prisma
+zod react-hook-form
+lucia @simplewebauthn/server @simplewebauthn/browser
+argon2
+jose (JWT helpers if needed)
+grapesjs grapesjs-preset-newsletter grapesjs-mjml mjml
+juice
+papaparse xlsx
+axios
+shadcn/ui radix-ui
+clsx tailwind-merge
+eslint prettier (config)
+Implementation details
+
+Auth (Lucia + Passkeys):
+
+Implement password registration: POST /api/auth/register with email+password; hash with argon2; validate with Zod.
+Implement login: POST /api/auth/login; set session cookie; CSRF token for protected POST routes.
+Implement WebAuthn registration:
+GET /api/webauthn/registration-options: generateRegistrationOptions with relyingParty = app domain; user id/email; save challenge in session.
+POST /api/webauthn/verify-registration: verifyRegistrationResponse; store credential in WebAuthnCredential.
+Implement WebAuthn authentication similarly with authentication-options and verify-authentication.
+UI: /passkeys page to add/remove passkeys.
+Email builder:
+
+components/EmailBuilder.tsx: dynamic import GrapesJS (no SSR). Use grapesjs-preset-newsletter; enable blocks for sections, columns, text, images, CTA button. Provide mobile preview toggle.
+Output HTML: Capture getHtml(). If using MJML blocks, compile with mjml to HTML.
+Inline CSS using juice before sending.
+Campaign form:
+
+components/CampaignForm.tsx: fields From name/email, Reply-To, Subject, Preview text; optional UTM fields (source, medium, campaign, term, content).
+Validate with Zod. Save to DB as Campaign.
+Recipients:
+
+components/RecipientUploader.tsx: accepts CSV/XLSX; shows column mapping UI; dedupe and validate; upload to /api/recipients/upload to store a RecipientList and Recipient rows.
+Google Sheets:
+If user provides a public URL, transform to CSV export and fetch server-side.
+If private, use service account JSON to fetch via Google Sheets API (document the steps in README).
+Sending engine:
+
+lib/email/providers/brevo.ts
+export async function sendViaBrevo({from, subject, html, to[]}): POST https://api.brevo.com/v3/smtp/email with header api-key.
+lib/email/providers/mailjet.ts
+export async function sendViaMailjet({from, subject, html, to[]}): POST https://api.mailjet.com/v3.1/send with Basic Auth (API key + secret). Body: { Messages: [ { From: {Email, Name}, To: [{Email, Name}], Subject, HTMLPart: html } ] }
+lib/email/providers/sendpulse.ts
+function getSendPulseToken(): POST https://api.sendpulse.com/oauth/access_token with x-www-form-urlencoded: grant_type=client_credentials&client_id=&client_secret=
+sendViaSendPulse({from, subject, html, to[]}): POST https://api.sendpulse.com/smtp/emails with Authorization: Bearer <token>, JSON:
+{
+"email": {
+"subject": "...",
+"from": {"name": "...", "email": "..."},
+"to": [{"email":"...","name":"..."}],
+"html": "<html>...</html>"
+}
+}
+lib/email/sender.ts
+Read provider limits from env with defaults 400/300/200
+Track daily usage in ProviderUsage table (reset by date)
+Distribute recipients across providers in that priority: sendpulse -> brevo -> mailjet (make this configurable)
+Chunk recipients into payload sizes of 50
+Return per-recipient success/failure logs
+API routes for sending:
+
+POST /api/send/init: Input { campaignId, listId }. Create SendJob with status=queued, compute total, return jobId.
+POST /api/send/process: Input { jobId }. Server loads job, calculates next chunk based on ProviderUsage and marks processing; sends 1–3 chunks per call; updates job stats; responds with { sent, failed, remaining, completed: boolean }. The client loops with exponential backoff until completed.
+GET /api/send/status?jobId=: returns send logs and stats.
+UI flow:
+
+Dashboard: recent templates and campaigns; CTA to “Create new campaign”
+Builder: left side form (sender fields + UTM), right side editor (GrapesJS). Save draft and proceed.
+Recipients: upload/import list, mapping, validation, save list.
+Send: select campaign + list, show distribution plan (e.g., 400 via SendPulse, 300 via Brevo, 200 via Mailjet, then repeat next day if more), start sending; show progress indicator and logs; allow cancel.
+Branding and design:
+
+Create styles/theme.css with CSS variables:
+:root {
+--brand-primary: #0EA5E9; /* TODO: replace with ncmmastering brand color */
+--brand-secondary: #111827;
+--brand-accent: #22D3EE;
+--brand-bg: #0B0B0B;
+--brand-fg: #F9FAFB;
+}
+Use a premium look: lots of whitespace, subtle glassy cards, rounded corners, elegant typography (system stack: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Inter)
+Buttons and focus states with subtle shadows and motion
+Include a /config/brand.ts file exporting those colors so components can import them.
+Rate limits and safety:
+
+Basic server-side rate limit middleware for auth and send routes
+Validate emails; skip invalid; provide export of failed records
+Note: provider quotas can change; keep limits configurable via env and in-app settings
+README.md (include):
+
+Overview, features, architecture diagram (ASCII ok)
+How to run locally (pnpm dev), migrate Prisma, seed
+How to set envs and provider API keys
+How to configure Google Sheets import (public vs service account)
+How to set brand colors by editing config/brand.ts and styles/theme.css
+How to deploy to Vercel (and link a Neon Postgres)
+How to connect to GitHub
+Legal note: add unsubscribe mechanisms and comply with email laws (CAN-SPAM/GDPR)
+THERE:
+
+.github/workflows/ci.yml: install, typecheck, lint, build on push/PR
+vercel.json:
+
+Configure build and set regions if needed
+Acceptance criteria
+
+I can register with email/password, login, add a passkey, then login via passkey.
+I can build an email with drag-and-drop, see mobile/desktop preview, and it inlines CSS on send.
+I can upload a CSV/XLSX or import a Google Sheet and map columns; invalid emails are flagged and deduped.
+When I start sending, recipients are automatically split across SendPulse/Brevo/Mailjet per configured limits (default 400/300/200) and sent in batches with visible progress, without serverless timeouts.
+App looks premium, respects brand color variables, and is responsive.
+Code runs locally and is deployable on Vercel. A README explains setup.
+Now implement the full codebase with this structure and functionality. Include realistic error handling, types, and comments. Provide seed scripts for Prisma so I can log in as a demo user. Ensure all routes are protected appropriately.
